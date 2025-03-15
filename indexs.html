@@ -1,190 +1,417 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D 立方体拆分</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <meta charset="UTF-8">
+  <title>1立方米正方体分割演示</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 10px;
+      border-radius: 5px;
+      font-family: Arial, sans-serif;
+      z-index: 10;
+    }
+    button { margin: 5px; }
+  </style>
 </head>
 <body>
-    <button id="btnDivideLayers">分层</button>
-    <button id="btnExtractLayer" disabled>提取层</button>
-    <button id="btnDivideRows" disabled>分行</button>
-    <button id="btnExtractRow" disabled>拿下下一行</button>
-    <button id="btnDivideColumns" disabled>分列</button>
-    <button id="btnExtractColumn" disabled>提取列</button>
-    <button id="btnDivideAll">全部分解</button>
-    <button id="btnReset">重置</button>
+  <div id="controls">
+    <button id="divideLayersBtn">分层分割</button>
+    <button id="extractLayerBtn" disabled>拿下下一层</button>
+    <button id="divideRowsBtn" disabled>分行分割</button>
+    <button id="extractRowBtn" disabled>拿下下一行</button>
+    <button id="divideColumnsBtn" disabled>分列分块</button>
+    <button id="extractColumnBtn" disabled>拿下下一列</button>
+    <button id="resetBtn">重置</button>
+  </div>
+  
+  <!-- 引入 Three.js 库 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    let scene, camera, renderer;
+    let cubeGroup;             // 存放所有层的组（仅包含标记为 isLayer 的 Mesh）
+    let dividerGroup;          // 专门用于存放分隔线（针对分层操作）
+    let extractedLayers = [];  // 已提取出的层（按顺序存放）
+    let currentDividedLayer = null;  // 当前分行分割的组（Group，包含未提取的行）
+    let currentExtractedRow = null;  // 当前提取出来的行（用于分列分块）
+    let currentDividedRow = null;    // 当前分列分块的组（Group，包含未提取的列）
+    let extractedColumns = [];       // 已提取出的列（暂时未做多行排列）
+    const LAYER_GAP = 0.2;     // 分层时打开的间隙
+    const ROW_GAP = 0.1;       // 分行时打开的间隙
+    const COL_GAP = 0.1;       // 分列时打开的间隙
 
-    <script>
-        let scene, camera, renderer;
-        let originalCube;
-        let extractedLayers = [];
-        let isFullyDivided = false;
-        const ROW_GAP = 0.2;
-        const COL_GAP = 0.2;
+    const btnDivideLayers = document.getElementById("divideLayersBtn");
+    const btnExtractLayer  = document.getElementById("extractLayerBtn");
+    const btnDivideRows    = document.getElementById("divideRowsBtn");
+    const btnExtractRow    = document.getElementById("extractRowBtn");
+    const btnDivideColumns = document.getElementById("divideColumnsBtn");
+    const btnExtractColumn = document.getElementById("extractColumnBtn");
+    const btnReset         = document.getElementById("resetBtn");
 
-        function init() {
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 15, 20);
-            camera.lookAt(0, 0, 0);
+    // 初始化：创建由10个紧密层组成的正方体，放在固定位置（例如 x=-20），并添加整体标注
+    function init() {
+      extractedLayers = [];
+      currentDividedLayer = null;
+      currentExtractedRow = null;
+      currentDividedRow = null;
+      extractedColumns = [];
+      
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf0f0f0);
 
-            renderer = new THREE.WebGLRenderer();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 20, 40);
+      camera.lookAt(0, 0, 0);
 
-            // 创建大立方体
-            let geom = new THREE.BoxGeometry(10, 10, 10);
-            let mat = new THREE.MeshLambertMaterial({ color: 0x6699ff, opacity: 0.6, transparent: true });
-            originalCube = new THREE.Mesh(geom, mat);
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
 
-            // 添加边框
-            let edges = new THREE.EdgesGeometry(geom);
-            let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
-            let wireframe = new THREE.LineSegments(edges, lineMat);
-            originalCube.add(wireframe);
+      // 灯光
+      scene.add(new THREE.AmbientLight(0x888888));
+      let dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(20, 20, 10);
+      scene.add(dirLight);
 
-            scene.add(originalCube);
+      // 创建 cubeGroup：由10个层组成，每层为10×1×10；同时为每层添加边框，使其在运动时跟随
+      cubeGroup = new THREE.Group();
+      cubeGroup.position.set(-20, 0, 0);
+      for(let i = 0; i < 10; i++){
+        let geom = new THREE.BoxGeometry(10, 1, 10);
+        let mat = new THREE.MeshLambertMaterial({ color: 0x99ccff, opacity: 0.6, transparent: true });
+        let layerMesh = new THREE.Mesh(geom, mat);
+        layerMesh.userData.isLayer = true;
+        layerMesh.position.y = -5 + (i + 0.5);
+        // 添加边框，使层的轮廓随层运动
+        let edges = new THREE.EdgesGeometry(geom);
+        let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+        let layerWireframe = new THREE.LineSegments(edges, lineMat);
+        layerMesh.add(layerWireframe);
+        cubeGroup.add(layerMesh);
+      }
+      scene.add(cubeGroup);
 
-            let light = new THREE.PointLight(0xffffff, 1, 100);
-            light.position.set(10, 20, 20);
-            scene.add(light);
+      // 整体正方体标注“1立方米”
+      let label = createTextSprite("1立方米", { fontSize: 40, color: "#000000" });
+      label.position.set(0, 6, 0);
+      cubeGroup.add(label);
 
-            isFullyDivided = false;
-            animate();
+      // 创建专用分隔线组（用于分层分割），作为 cubeGroup 的子对象
+      dividerGroup = new THREE.Group();
+      cubeGroup.add(dividerGroup);
+
+      animate();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+
+    // 缓动函数 easeInOutQuad
+    function easeInOutQuad(t) {
+      return t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+    }
+
+    // 通用动画函数：将 object[property] 从 start 变化到 end，duration 单位 ms
+    function animateProperty(object, property, start, end, duration, onComplete) {
+      let startTime = Date.now();
+      function update() {
+        let elapsed = Date.now() - startTime;
+        let t = Math.min(elapsed / duration, 1);
+        let eased = easeInOutQuad(t);
+        object[property] = start + (end - start) * eased;
+        if(t < 1) {
+          requestAnimationFrame(update);
+        } else {
+          if(onComplete) onComplete();
         }
+      }
+      update();
+    }
 
-        function animate() {
-            requestAnimationFrame(animate);
-            renderer.render(scene, camera);
+    // 创建文字 Sprite（基于 canvas）
+    function createTextSprite(message, parameters) {
+      if(parameters === undefined) parameters = {};
+      let fontface = parameters.fontface || "Arial";
+      let fontsize = parameters.fontSize || 24;
+      let color = parameters.color || "#000000";
+      let canvas = document.createElement("canvas");
+      let context = canvas.getContext("2d");
+      context.font = fontsize + "px " + fontface;
+      let metrics = context.measureText(message);
+      let textWidth = metrics.width;
+      canvas.width = textWidth + 20;
+      canvas.height = fontsize + 20;
+      context.font = fontsize + "px " + fontface;
+      context.fillStyle = color;
+      context.fillText(message, 10, fontsize + 5);
+      let texture = new THREE.CanvasTexture(canvas);
+      let spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+      let sprite = new THREE.Sprite(spriteMaterial);
+      sprite.scale.set(canvas.width/20, canvas.height/20, 1);
+      return sprite;
+    }
+
+    // 1. 分层分割：对所有标记为层的对象打开层间间隙，并在 dividerGroup 中绘制虚线分隔
+    function divideLayers() {
+      if(!cubeGroup) return;
+      let layers = cubeGroup.children.filter(child => child.userData.isLayer);
+      layers.forEach((layer, index) => {
+        let oldY = layer.position.y;
+        let newY = (-5 + (index + 0.5)) + index * LAYER_GAP;
+        animateProperty(layer.position, "y", oldY, newY, 1000);
+      });
+      // 动画结束后添加分隔虚线
+      setTimeout(() => {
+        // 清除已有虚线
+        let existingDividers = dividerGroup.children.slice();
+        existingDividers.forEach(div => dividerGroup.remove(div));
+        for(let i = 0; i < layers.length - 1; i++){
+          let lowerLayer = layers[i];
+          let upperLayer = layers[i+1];
+          let lowerTop = lowerLayer.position.y + 0.5;
+          let upperBottom = upperLayer.position.y - 0.5;
+          let dividerY = (lowerTop + upperBottom) / 2;
+          let points = [
+            new THREE.Vector3(-5, dividerY, -5),
+            new THREE.Vector3(5, dividerY, -5)
+          ];
+          let geometry = new THREE.BufferGeometry().setFromPoints(points);
+          let material = new THREE.LineDashedMaterial({ color: 0xff0000, dashSize: 0.3, gapSize: 0.2 });
+          let line = new THREE.Line(geometry, material);
+          line.computeLineDistances();
+          dividerGroup.add(line);
         }
+        btnDivideLayers.disabled = true;
+        // 启用提取层按钮
+        btnExtractLayer.disabled = false;
+      }, 1100);
+    }
 
-        function animateProperty(object, property, start, end, duration, onComplete) {
-            let startTime = performance.now();
-            function animateStep() {
-                let now = performance.now();
-                let elapsed = now - startTime;
-                let t = Math.min(elapsed / duration, 1);
-                object[property] = start + (end - start) * t;
-                if (t < 1) {
-                    requestAnimationFrame(animateStep);
-                } else if (onComplete) {
-                    onComplete();
-                }
-            }
-            animateStep();
+    // 2. 提取下一层：从 cubeGroup 中提取最下方的层（只取 isLayer 对象），转换全局坐标后将其移动到右侧（整齐排列）
+    function extractLayer() {
+      if(!cubeGroup) return;
+      let layers = cubeGroup.children.filter(child => child.userData.isLayer);
+      if(layers.length === 0) return;
+      let layer = layers[0];
+      cubeGroup.remove(layer);
+      let localPos = layer.position.clone();
+      let worldPos = cubeGroup.localToWorld(localPos);
+      layer.position.copy(worldPos);
+      scene.add(layer);
+      // 目标位置：横向整齐排列，每个层占 10 单位宽加 2 单位间隙
+      let targetX = 1;
+      animateProperty(layer.position, "x", layer.position.x, targetX, 1000, () => {
+        btnDivideRows.disabled = false;
+      });
+      extractedLayers.push(layer);
+      // 不再移动 cubeGroup
+      if(layers.length === 1) {
+        btnExtractLayer.disabled = true;
+      }
+    }
+
+    // 3. 分行分割：针对最新提取的层，将其拆分为 10 行（每行为10×1×1），打开行间间隙并添加虚线分隔  
+    function divideRows() {
+      if(extractedLayers.length === 0) return;
+      let layer = extractedLayers[extractedLayers.length - 1];
+      scene.remove(layer);
+      let rowGroup = new THREE.Group();
+      rowGroup.position.copy(layer.position);
+      // 创建10行，每行为10×1×1，且为每行添加边框
+      for(let i = 0; i < 10; i++){
+        let geom = new THREE.BoxGeometry(10, 1, 1);
+        let mat = new THREE.MeshLambertMaterial({ color: 0xffdd99, opacity: 0.8, transparent: true });
+        let rowMesh = new THREE.Mesh(geom, mat);
+        rowMesh.userData.isRow = true;
+        rowMesh.position.z = -5 + (i + 0.5);
+        let edges = new THREE.EdgesGeometry(geom);
+        let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+        let rowWireframe = new THREE.LineSegments(edges, lineMat);
+        rowMesh.add(rowWireframe);
+        rowGroup.add(rowMesh);
+      }
+      // 打开行间隙
+      let rows = rowGroup.children.filter(child => child.userData.isRow);
+      rows.forEach((row, i) => {
+        let oldZ = row.position.z;
+        let newZ = (-5 + (i + 0.5)) + i * ROW_GAP;
+        animateProperty(row.position, "z", oldZ, newZ, 1000);
+      });
+      // 动画结束后添加虚线分隔，仅对 isRow 的对象
+      setTimeout(() => {
+        let existingRowDividers = rowGroup.children.filter(child => child.name === "rowDivider");
+        existingRowDividers.forEach(div => rowGroup.remove(div));
+        let rowMeshes = rowGroup.children.filter(child => child.userData.isRow);
+        for(let i = 0; i < rowMeshes.length - 1; i++){
+          let lowerRow = rowMeshes[i];
+          let upperRow = rowMeshes[i+1];
+          let lowerFront = lowerRow.position.z + 0.5;
+          let upperBack = upperRow.position.z - 0.5;
+          let dividerZ = (lowerFront + upperBack) / 2;
+          let points = [
+            new THREE.Vector3(-5, 0, dividerZ),
+            new THREE.Vector3(5, 0, dividerZ)
+          ];
+          let geometry = new THREE.BufferGeometry().setFromPoints(points);
+          let material = new THREE.LineDashedMaterial({ color: 0x00aa00, dashSize: 0.2, gapSize: 0.1 });
+          let line = new THREE.Line(geometry, material);
+          line.computeLineDistances();
+          line.name = "rowDivider";
+          rowGroup.add(line);
         }
+        btnDivideRows.disabled = true;
+        // 此时不自动提取行，让教师点击“拿下下一行”
+        btnExtractRow.disabled = false;
+        currentDividedLayer = rowGroup;
+      }, 1100);
+      scene.add(rowGroup);
+    }
 
-        function divideLayers() {
-            if (!originalCube) return;
-            scene.remove(originalCube);
-            let layerGroup = new THREE.Group();
+    // 4. 提取下一行：从当前分行组中提取一行，转换为全局坐标后移动到右侧  
+    // 修改目标 x 坐标为当前行 x + 12，保证与提取层时一致
+    function extractRow() {
+      if(!currentDividedLayer) return;
+      let rows = currentDividedLayer.children.filter(child => child.userData.isRow);
+      if(rows.length === 0) return;
+      let row = rows[0];
+      currentDividedLayer.remove(row);
+      let localPos = row.position.clone();
+      let worldPos = currentDividedLayer.localToWorld(localPos);
+      row.position.copy(worldPos);
+      scene.add(row);
+      let targetX = row.position.x + 12;
+      animateProperty(row.position, "x", row.position.x, targetX, 1000, () => {
+        // 无论当前行组是否还有剩余，都先禁用“提取行”按钮，
+        // 并将当前提取的行设置为当前待分块对象，启用“分列分块”按钮
+        btnExtractRow.disabled = true;
+        currentExtractedRow = row;
+        btnDivideColumns.disabled = false;
+        // 如果当前行组中还有其他行，则教师之后可继续提取（待本行分块完成后再启用）
+      });
+    }
 
-            for (let i = 0; i < 10; i++) {
-                let geom = new THREE.BoxGeometry(10, 1, 10);
-                let mat = new THREE.MeshLambertMaterial({ color: 0xffcc66, opacity: 0.8, transparent: true });
-                let layer = new THREE.Mesh(geom, mat);
-                layer.position.y = -4.5 + i;
-
-                let edges = new THREE.EdgesGeometry(geom);
-                let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
-                let wireframe = new THREE.LineSegments(edges, lineMat);
-                layer.add(wireframe);
-                layerGroup.add(layer);
-            }
-
-            scene.add(layerGroup);
-            extractedLayers.push(layerGroup);
-            btnExtractLayer.disabled = false;
+    // 5. 分列分块：针对当前提取的行，将其拆分为 10 列（每个为1×1×1），打开列间间隙并添加虚线分隔  
+    function divideColumns() {
+      if(!currentExtractedRow) return;
+      // 将当前提取的行从场景中移除，进行列拆分
+      scene.remove(currentExtractedRow);
+      let columnGroup = new THREE.Group();
+      columnGroup.position.copy(currentExtractedRow.position);
+      // 创建10个列，每个为1×1×1，并添加边框
+      for(let i = 0; i < 10; i++){
+        let geom = new THREE.BoxGeometry(1, 1, 1);
+        let mat = new THREE.MeshLambertMaterial({ color: 0xffcc66, opacity: 0.9, transparent: true });
+        let colMesh = new THREE.Mesh(geom, mat);
+        colMesh.userData.isColumn = true;
+        colMesh.position.x = -5 + (i + 0.5);
+        let edges = new THREE.EdgesGeometry(geom);
+        let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+        let colWireframe = new THREE.LineSegments(edges, lineMat);
+        colMesh.add(colWireframe);
+        columnGroup.add(colMesh);
+      }
+      // 打开列间隙
+      let columns = columnGroup.children.filter(child => child.userData.isColumn);
+      columns.forEach((col, i) => {
+        let oldX = col.position.x;
+        let newX = (-5 + (i + 0.5)) + i * COL_GAP;
+        animateProperty(col.position, "x", oldX, newX, 1000);
+      });
+      // 动画结束后添加虚线分隔（仅对 isColumn 对象）
+      setTimeout(() => {
+        let existingColDividers = columnGroup.children.filter(child => child.name === "colDivider");
+        existingColDividers.forEach(div => columnGroup.remove(div));
+        let colMeshes = columnGroup.children.filter(child => child.userData.isColumn);
+        for(let i = 0; i < colMeshes.length - 1; i++){
+          let leftCol = colMeshes[i];
+          let rightCol = colMeshes[i+1];
+          let leftRight = leftCol.position.x + 0.5;
+          let rightLeft = rightCol.position.x - 0.5;
+          let dividerX = (leftRight + rightLeft) / 2;
+          // 这里在前侧绘制一条竖线
+          let points = [
+            new THREE.Vector3(dividerX, -0.5, -0.5),
+            new THREE.Vector3(dividerX, 0.5, -0.5)
+          ];
+          let geometry = new THREE.BufferGeometry().setFromPoints(points);
+          let material = new THREE.LineDashedMaterial({ color: 0x0000ff, dashSize: 0.2, gapSize: 0.1 });
+          let line = new THREE.Line(geometry, material);
+          line.computeLineDistances();
+          line.name = "colDivider";
+          columnGroup.add(line);
         }
+        btnDivideColumns.disabled = true;
+        btnExtractColumn.disabled = false;
+        currentDividedRow = columnGroup;
+      }, 1100);
+      scene.add(columnGroup);
+    }
 
-        function divideAll() {
-            if (!originalCube || isFullyDivided) return;
-            scene.remove(originalCube);
-
-            let allCubesGroup = new THREE.Group();
-            let cubeSize = 1;
-            let gap = 0.2;
-            let totalSize = 10;
-
-            for (let x = 0; x < 10; x++) {
-                for (let y = 0; y < 10; y++) {
-                    for (let z = 0; z < 10; z++) {
-                        let geom = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
-                        let mat = new THREE.MeshLambertMaterial({ color: 0xffaa66, opacity: 0.9, transparent: true });
-                        let cube = new THREE.Mesh(geom, mat);
-
-                        let startPos = new THREE.Vector3(
-                            x - totalSize / 2 + 0.5,
-                            y - totalSize / 2 + 0.5,
-                            z - totalSize / 2 + 0.5
-                        );
-                        cube.position.copy(startPos);
-
-                        let edges = new THREE.EdgesGeometry(geom);
-                        let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
-                        let wireframe = new THREE.LineSegments(edges, lineMat);
-                        cube.add(wireframe);
-
-                        allCubesGroup.add(cube);
-                    }
-                }
-            }
-
-            scene.add(allCubesGroup);
-
-            allCubesGroup.children.forEach(cube => {
-                let direction = cube.position.clone().normalize();
-                let targetPos = cube.position.clone().addScaledVector(direction, 2);
-                animateProperty(cube.position, "x", cube.position.x, targetPos.x, 1000);
-                animateProperty(cube.position, "y", cube.position.y, targetPos.y, 1000);
-                animateProperty(cube.position, "z", cube.position.z, targetPos.z, 1000);
-            });
-
-            isFullyDivided = true;
-            btnDivideAll.disabled = true;
-            disableStepButtons();
+    // 6. 提取下一列：从当前分列组中提取一列，转换为全局坐标后移至右侧  
+    function extractColumn() {
+      if(!currentDividedRow) return;
+      let cols = currentDividedRow.children.filter(child => child.userData.isColumn);
+      if(cols.length === 0) return;
+      let col = cols[0];
+      currentDividedRow.remove(col);
+      let localPos = col.position.clone();
+      let worldPos = currentDividedRow.localToWorld(localPos);
+      col.position.copy(worldPos);
+      scene.add(col);
+      let targetX = col.position.x + 12;
+      animateProperty(col.position, "x", col.position.x, targetX, 1000, () => {
+        let remaining = currentDividedRow.children.filter(child => child.userData.isColumn);
+        if(remaining.length === 0) {
+          btnExtractColumn.disabled = true;
+          currentDividedRow = null;
+          // 分块完成后，清空当前提取的行，并如果当前分行组中还有未提取的行，则启用“拿下下一行”
+          currentExtractedRow = null;
+          if(currentDividedLayer && currentDividedLayer.children.filter(child => child.userData.isRow).length > 0) {
+            btnExtractRow.disabled = false;
+          }
         }
+      });
+      extractedColumns.push(col);
+    }
 
-        function disableStepButtons() {
-            btnDivideLayers.disabled = true;
-            btnExtractLayer.disabled = true;
-            btnDivideRows.disabled = true;
-            btnExtractRow.disabled = true;
-            btnDivideColumns.disabled = true;
-            btnExtractColumn.disabled = true;
-        }
+    // 重置：清空场景、删除渲染器节点，并重新初始化所有状态和对象
+    function resetScene() {
+      while(scene && scene.children.length > 0){
+        scene.remove(scene.children[0]);
+      }
+      if(renderer && renderer.domElement && renderer.domElement.parentElement){
+        renderer.domElement.parentElement.removeChild(renderer.domElement);
+      }
+      btnDivideLayers.disabled = false;
+      btnExtractLayer.disabled  = true;
+      btnDivideRows.disabled    = true;
+      btnExtractRow.disabled    = true;
+      btnDivideColumns.disabled = true;
+      btnExtractColumn.disabled = true;
+      init();
+    }
 
-        function resetScene() {
-            while (scene && scene.children.length > 0) {
-                scene.remove(scene.children[0]);
-            }
-            if (renderer && renderer.domElement && renderer.domElement.parentElement) {
-                renderer.domElement.parentElement.removeChild(renderer.domElement);
-            }
-            btnDivideLayers.disabled = false;
-            btnExtractLayer.disabled  = true;
-            btnDivideRows.disabled    = true;
-            btnExtractRow.disabled    = true;
-            btnDivideColumns.disabled = true;
-            btnExtractColumn.disabled = true;
-            btnDivideAll.disabled     = false;
-            isFullyDivided = false;
-            init();
-        }
+    btnDivideLayers.addEventListener("click", divideLayers);
+    btnExtractLayer.addEventListener("click", extractLayer);
+    btnDivideRows.addEventListener("click", divideRows);
+    btnExtractRow.addEventListener("click", extractRow);
+    btnDivideColumns.addEventListener("click", divideColumns);
+    btnExtractColumn.addEventListener("click", extractColumn);
+    btnReset.addEventListener("click", resetScene);
 
-        btnDivideLayers.addEventListener("click", divideLayers);
-        btnDivideAll.addEventListener("click", divideAll);
-        btnReset.addEventListener("click", resetScene);
+    window.addEventListener("resize", function(){
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
 
-        window.addEventListener("resize", function(){
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-
-        init();
-    </script>
+    init();
+  </script>
 </body>
 </html>
