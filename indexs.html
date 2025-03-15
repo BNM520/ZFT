@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 立方体拆分</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <button id="btnDivideLayers">分层</button>
+    <button id="btnExtractLayer" disabled>提取层</button>
+    <button id="btnDivideRows" disabled>分行</button>
+    <button id="btnExtractRow" disabled>拿下下一行</button>
+    <button id="btnDivideColumns" disabled>分列</button>
+    <button id="btnExtractColumn" disabled>提取列</button>
+    <button id="btnDivideAll">全部分解</button>
+    <button id="btnReset">重置</button>
+
+    <script>
+        let scene, camera, renderer;
+        let originalCube;
+        let extractedLayers = [];
+        let isFullyDivided = false;
+        const ROW_GAP = 0.2;
+        const COL_GAP = 0.2;
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 15, 20);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // 创建大立方体
+            let geom = new THREE.BoxGeometry(10, 10, 10);
+            let mat = new THREE.MeshLambertMaterial({ color: 0x6699ff, opacity: 0.6, transparent: true });
+            originalCube = new THREE.Mesh(geom, mat);
+
+            // 添加边框
+            let edges = new THREE.EdgesGeometry(geom);
+            let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+            let wireframe = new THREE.LineSegments(edges, lineMat);
+            originalCube.add(wireframe);
+
+            scene.add(originalCube);
+
+            let light = new THREE.PointLight(0xffffff, 1, 100);
+            light.position.set(10, 20, 20);
+            scene.add(light);
+
+            isFullyDivided = false;
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        function animateProperty(object, property, start, end, duration, onComplete) {
+            let startTime = performance.now();
+            function animateStep() {
+                let now = performance.now();
+                let elapsed = now - startTime;
+                let t = Math.min(elapsed / duration, 1);
+                object[property] = start + (end - start) * t;
+                if (t < 1) {
+                    requestAnimationFrame(animateStep);
+                } else if (onComplete) {
+                    onComplete();
+                }
+            }
+            animateStep();
+        }
+
+        function divideLayers() {
+            if (!originalCube) return;
+            scene.remove(originalCube);
+            let layerGroup = new THREE.Group();
+
+            for (let i = 0; i < 10; i++) {
+                let geom = new THREE.BoxGeometry(10, 1, 10);
+                let mat = new THREE.MeshLambertMaterial({ color: 0xffcc66, opacity: 0.8, transparent: true });
+                let layer = new THREE.Mesh(geom, mat);
+                layer.position.y = -4.5 + i;
+
+                let edges = new THREE.EdgesGeometry(geom);
+                let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+                let wireframe = new THREE.LineSegments(edges, lineMat);
+                layer.add(wireframe);
+                layerGroup.add(layer);
+            }
+
+            scene.add(layerGroup);
+            extractedLayers.push(layerGroup);
+            btnExtractLayer.disabled = false;
+        }
+
+        function divideAll() {
+            if (!originalCube || isFullyDivided) return;
+            scene.remove(originalCube);
+
+            let allCubesGroup = new THREE.Group();
+            let cubeSize = 1;
+            let gap = 0.2;
+            let totalSize = 10;
+
+            for (let x = 0; x < 10; x++) {
+                for (let y = 0; y < 10; y++) {
+                    for (let z = 0; z < 10; z++) {
+                        let geom = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+                        let mat = new THREE.MeshLambertMaterial({ color: 0xffaa66, opacity: 0.9, transparent: true });
+                        let cube = new THREE.Mesh(geom, mat);
+
+                        let startPos = new THREE.Vector3(
+                            x - totalSize / 2 + 0.5,
+                            y - totalSize / 2 + 0.5,
+                            z - totalSize / 2 + 0.5
+                        );
+                        cube.position.copy(startPos);
+
+                        let edges = new THREE.EdgesGeometry(geom);
+                        let lineMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+                        let wireframe = new THREE.LineSegments(edges, lineMat);
+                        cube.add(wireframe);
+
+                        allCubesGroup.add(cube);
+                    }
+                }
+            }
+
+            scene.add(allCubesGroup);
+
+            allCubesGroup.children.forEach(cube => {
+                let direction = cube.position.clone().normalize();
+                let targetPos = cube.position.clone().addScaledVector(direction, 2);
+                animateProperty(cube.position, "x", cube.position.x, targetPos.x, 1000);
+                animateProperty(cube.position, "y", cube.position.y, targetPos.y, 1000);
+                animateProperty(cube.position, "z", cube.position.z, targetPos.z, 1000);
+            });
+
+            isFullyDivided = true;
+            btnDivideAll.disabled = true;
+            disableStepButtons();
+        }
+
+        function disableStepButtons() {
+            btnDivideLayers.disabled = true;
+            btnExtractLayer.disabled = true;
+            btnDivideRows.disabled = true;
+            btnExtractRow.disabled = true;
+            btnDivideColumns.disabled = true;
+            btnExtractColumn.disabled = true;
+        }
+
+        function resetScene() {
+            while (scene && scene.children.length > 0) {
+                scene.remove(scene.children[0]);
+            }
+            if (renderer && renderer.domElement && renderer.domElement.parentElement) {
+                renderer.domElement.parentElement.removeChild(renderer.domElement);
+            }
+            btnDivideLayers.disabled = false;
+            btnExtractLayer.disabled  = true;
+            btnDivideRows.disabled    = true;
+            btnExtractRow.disabled    = true;
+            btnDivideColumns.disabled = true;
+            btnExtractColumn.disabled = true;
+            btnDivideAll.disabled     = false;
+            isFullyDivided = false;
+            init();
+        }
+
+        btnDivideLayers.addEventListener("click", divideLayers);
+        btnDivideAll.addEventListener("click", divideAll);
+        btnReset.addEventListener("click", resetScene);
+
+        window.addEventListener("resize", function(){
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>
